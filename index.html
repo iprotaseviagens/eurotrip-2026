@@ -69,6 +69,12 @@ body{background:var(--bg);color:var(--txt);font-family:'Plus Jakarta Sans',sans-
 .chart-ttl{font-family:'Playfair Display',serif;font-size:15px;font-weight:600;margin-bottom:3px}
 .chart-sub{color:var(--txt2);font-size:11px;margin-bottom:14px}
 .chart-wrap{position:relative;height:240px}
+.chart-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.chart-hdr .chart-sub{margin-bottom:0}
+.curr-mode-toggle{display:inline-flex;background:var(--surf2);border:1px solid var(--bord);border-radius:8px;padding:2px;gap:2px;flex-shrink:0}
+.curr-mode-btn{background:transparent;color:var(--txt2);border:none;padding:5px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+.curr-mode-btn:hover{color:var(--txt)}
+.curr-mode-btn.active{background:var(--gold);color:#0B1929}
 
 /* ── CARDS / SURFACES ── */
 .card{background:var(--surf);border:1px solid var(--bord);border-radius:var(--r)}
@@ -262,8 +268,17 @@ input.toggle:checked::after{left:18px;background:#fff}
         <div class="chart-wrap"><canvas id="ch-cat"></canvas></div>
       </div>
       <div class="chart-card">
-        <div class="chart-ttl">Custo por Viajante</div>
-        <div class="chart-sub">Parte de cada pessoa (R$ + €)</div>
+        <div class="chart-hdr">
+          <div>
+            <div class="chart-ttl">Custo por Viajante × Categoria</div>
+            <div class="chart-sub">Composição do gasto de cada pessoa por categoria</div>
+          </div>
+          <div class="curr-mode-toggle" id="trav-curr-toggle">
+            <button class="curr-mode-btn active" data-mode="ref" onclick="setTravCurrencyMode('ref')" title="Tudo convertido para R$ (1€ = 6R$)">R$ ref.</button>
+            <button class="curr-mode-btn" data-mode="brl" onclick="setTravCurrencyMode('brl')" title="Apenas despesas em Real">R$</button>
+            <button class="curr-mode-btn" data-mode="eur" onclick="setTravCurrencyMode('eur')" title="Apenas despesas em Euro">€</button>
+          </div>
+        </div>
         <div class="chart-wrap"><canvas id="ch-trav"></canvas></div>
       </div>
     </div>
@@ -775,11 +790,74 @@ function drawCategoryChart() {
   charts['cat'] = new Chart(ctx, { type:'doughnut', data: { labels: cats.map(c => c.icon+' '+c.name), datasets:[{ data: cats.map(c => catTot[c.id]), backgroundColor: cats.map(c => c.color+'CC'), borderColor: cats.map(c => c.color), borderWidth:2, hoverOffset:8 }] }, options: { responsive:true, maintainAspectRatio:false, plugins: { legend:{ position:'right', labels:{color:'#8FA3BF',font:{size:11},boxWidth:12}}, tooltip:{ callbacks:{ label: ctx => ' '+ctx.label+': '+fmt(ctx.raw,'BRL')+' (ref.)' }}}} });
 }
 
+// Modo de moeda do gráfico Viajante × Categoria (runtime apenas)
+// 'ref' = tudo em R$ (1€=6R$) | 'brl' = só BRL | 'eur' = só EUR
+let travCurrencyMode = 'ref';
+
+window.setTravCurrencyMode = function(mode) {
+  if (!['ref','brl','eur'].includes(mode)) return;
+  travCurrencyMode = mode;
+  document.querySelectorAll('#trav-curr-toggle .curr-mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  drawTravelerChart();
+};
+
+// Soma do que travId gastou na categoria catId, no modo de moeda escolhido
+function travCatTotal(travId, catId, mode) {
+  return state.expenses
+    .filter(e => e.categoryId === catId && e.participants && e.participants.includes(travId))
+    .reduce((sum, e) => {
+      const share = getShare(e, travId);
+      if (mode === 'brl') return sum + (e.currency === 'BRL' ? share : 0);
+      if (mode === 'eur') return sum + (e.currency === 'EUR' ? share : 0);
+      return sum + (e.currency === 'EUR' ? share * 6 : share); // ref
+    }, 0);
+}
+
 function drawTravelerChart() {
   destroyChart('trav');
   const ctx = document.getElementById('ch-trav').getContext('2d');
   if (!state.travelers.length) return;
-  charts['trav'] = new Chart(ctx, { type:'bar', data: { labels: state.travelers.map(t => t.name), datasets: [{ label:'R$ (BRL)', data: state.travelers.map(t => travTotalByCurr(t.id,'BRL')), backgroundColor:'rgba(226,185,111,.7)', borderColor:'#E2B96F', borderWidth:1.5, borderRadius:6 }, { label:'€ (EUR)', data: state.travelers.map(t => travTotalByCurr(t.id,'EUR')), backgroundColor:'rgba(46,196,182,.7)', borderColor:'#2EC4B6', borderWidth:1.5, borderRadius:6 }] }, options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ labels:{color:'#8FA3BF',font:{size:11}}}}, scales:{ x:{ticks:{color:'#8FA3BF'},grid:{color:'rgba(34,51,85,.5)'}}, y:{ticks:{color:'#8FA3BF'},grid:{color:'rgba(34,51,85,.5)'}} } } });
+
+  // Um dataset por categoria → segmentos empilhados na barra de cada viajante
+  const datasets = state.categories.map(cat => ({
+    label: cat.icon + ' ' + cat.name,
+    data: state.travelers.map(t => travCatTotal(t.id, cat.id, travCurrencyMode)),
+    backgroundColor: cat.color + 'CC',
+    borderColor: cat.color,
+    borderWidth: 1,
+    borderRadius: 4,
+    _catId: cat.id
+  })).filter(ds => ds.data.some(v => v > 0));  // omite categorias sem gasto
+
+  const fmtCurr = travCurrencyMode === 'eur' ? 'EUR' : 'BRL';
+  const refSuffix = travCurrencyMode === 'ref' ? ' (ref.)' : '';
+
+  charts['trav'] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: state.travelers.map(t => t.name), datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#8FA3BF', font: { size: 10 }, boxWidth: 12, padding: 8 } },
+        tooltip: {
+          callbacks: {
+            label: c => ' ' + c.dataset.label + ': ' + fmt(c.raw, fmtCurr) + refSuffix,
+            footer: items => {
+              const total = items.reduce((s, i) => s + i.parsed.y, 0);
+              return 'Total: ' + fmt(total, fmtCurr) + refSuffix;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: '#8FA3BF' }, grid: { color: 'rgba(34,51,85,.5)' } },
+        y: { stacked: true, ticks: { color: '#8FA3BF' }, grid: { color: 'rgba(34,51,85,.5)' }, beginAtZero: true }
+      }
+    }
+  });
 }
 
 function drawDailyChart() {
