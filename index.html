@@ -100,6 +100,10 @@ textarea.fctl{resize:vertical;min-height:60px}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
 th{background:var(--surf2);color:var(--txt2);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;padding:11px 14px;text-align:left;white-space:nowrap}
+th.sortable{cursor:pointer;user-select:none;transition:color .15s}
+th.sortable:hover{color:var(--gold)}
+th.sortable .sort-ind{display:inline-block;margin-left:5px;font-size:9px;opacity:.35;transition:opacity .15s}
+th.sortable.sort-asc .sort-ind,th.sortable.sort-desc .sort-ind{opacity:1;color:var(--gold)}
 td{padding:13px 14px;border-bottom:1px solid rgba(34,51,85,.5);font-size:13px;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
@@ -938,7 +942,41 @@ window.clearExpenseForm = function() {
   buildSplitParticipants();
 };
 
-function renderExpensesTable() {
+// Estado de ordenação da tabela (runtime apenas — não persiste no Firestore)
+let expenseSort = { col: 'date', dir: 'desc' };
+
+const SORT_GETTERS = {
+  date:        e => e.date || '',
+  description: e => (e.description || '').toLowerCase(),
+  category:    e => (getCat(e.categoryId)?.name || '').toLowerCase(),
+  subcategory: e => (e.subcategory || '').toLowerCase(),
+  amount:      e => e.currency === 'EUR' ? e.amount * 6 : e.amount,  // normaliza para comparação justa
+  currency:    e => e.currency || '',
+  payer:       e => (getTrav(e.payerId)?.name || '').toLowerCase(),
+  split:       e => (e.participants || []).length
+};
+
+window.sortExpensesBy = function(col) {
+  if (expenseSort.col === col) {
+    expenseSort.dir = expenseSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    expenseSort.col = col;
+    expenseSort.dir = 'asc';
+  }
+  renderExpensesTable();
+};
+
+function sortIndicator(col) {
+  if (expenseSort.col !== col) return '<span class="sort-ind">⇅</span>';
+  return `<span class="sort-ind">${expenseSort.dir === 'asc' ? '▲' : '▼'}</span>`;
+}
+
+function sortClass(col) {
+  if (expenseSort.col !== col) return 'sortable';
+  return 'sortable sort-' + expenseSort.dir;
+}
+
+window.renderExpensesTable = function renderExpensesTable() {
   const catFilter = document.getElementById('f-cat')?.value || '';
   const currFilter = document.getElementById('f-curr')?.value || '';
   const travFilter = document.getElementById('f-trav')?.value || '';
@@ -952,7 +990,17 @@ function renderExpensesTable() {
     if (fromFilter && e.date < fromFilter) return false;
     if (toFilter && e.date > toFilter) return false;
     return true;
-  }).sort((a,b) => (b.date||'') > (a.date||'') ? 1 : -1);
+  });
+
+  // Ordenação configurável
+  const getter = SORT_GETTERS[expenseSort.col] || SORT_GETTERS.date;
+  const mult = expenseSort.dir === 'asc' ? 1 : -1;
+  filtered.sort((a, b) => {
+    const va = getter(a), vb = getter(b);
+    if (va < vb) return -1 * mult;
+    if (va > vb) return  1 * mult;
+    return 0;
+  });
 
   const totalBRL = filtered.filter(e=>e.currency==='BRL').reduce((s,e)=>s+e.amount,0);
   const totalEUR = filtered.filter(e=>e.currency==='EUR').reduce((s,e)=>s+e.amount,0);
@@ -969,7 +1017,17 @@ function renderExpensesTable() {
     return;
   }
   el.innerHTML = `<div class="tbl-wrap"><table>
-    <thead><tr><th>Data</th><th>Descrição</th><th>Cat. Macro</th><th>Subcategoria</th><th>Valor</th><th>Moeda</th><th>Pago por</th><th>Divisão</th><th>Ações</th></tr></thead>
+    <thead><tr>
+      <th class="${sortClass('date')}" onclick="sortExpensesBy('date')">Data${sortIndicator('date')}</th>
+      <th class="${sortClass('description')}" onclick="sortExpensesBy('description')">Descrição${sortIndicator('description')}</th>
+      <th class="${sortClass('category')}" onclick="sortExpensesBy('category')">Cat. Macro${sortIndicator('category')}</th>
+      <th class="${sortClass('subcategory')}" onclick="sortExpensesBy('subcategory')">Subcategoria${sortIndicator('subcategory')}</th>
+      <th class="${sortClass('amount')}" onclick="sortExpensesBy('amount')">Valor${sortIndicator('amount')}</th>
+      <th class="${sortClass('currency')}" onclick="sortExpensesBy('currency')">Moeda${sortIndicator('currency')}</th>
+      <th class="${sortClass('payer')}" onclick="sortExpensesBy('payer')">Pago por${sortIndicator('payer')}</th>
+      <th class="${sortClass('split')}" onclick="sortExpensesBy('split')">Divisão${sortIndicator('split')}</th>
+      <th>Ações</th>
+    </tr></thead>
     <tbody>${filtered.map(e => {
       const cat = getCat(e.categoryId);
       const payer = getTrav(e.payerId);
@@ -983,11 +1041,14 @@ function renderExpensesTable() {
         <td><span class="badge ${e.currency==='EUR'?'badge-teal':'badge-orange'}">${e.currency==='EUR'?'€ EUR':'R$ BRL'}</span></td>
         <td>${payer?payer.name:'-'}</td>
         <td><span style="font-size:11px;color:var(--txt2)">${e.split==='custom'?'👤 Custom':'÷ Igual'}<br><span title="${partNames}">${(e.participants||[]).length} pessoa${(e.participants||[]).length!==1?'s':''}</span></span></td>
-        <td><button class="btn btn-danger btn-xs" onclick="deleteExpense('${e.id}')">🗑️</button></td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-outline btn-xs" onclick="editExpense('${e.id}')" title="Editar" style="margin-right:4px">✏️</button>
+          <button class="btn btn-danger btn-xs" onclick="deleteExpense('${e.id}')" title="Remover">🗑️</button>
+        </td>
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
-}
+};
 
 window.deleteExpense = function(id) {
   if (!confirm('Remover esta despesa?')) return;
@@ -995,6 +1056,107 @@ window.deleteExpense = function(id) {
   scheduleSave();
   renderExpensesTable();
   notify('Despesa removida.');
+};
+
+// ══════════════════════════════════════════
+// EDIT EXPENSE
+// ══════════════════════════════════════════
+let editingExpenseId = null;
+
+window.editExpense = function(id) {
+  const exp = state.expenses.find(e => e.id === id);
+  if (!exp) { notify('Despesa não encontrada.','error'); return; }
+  editingExpenseId = id;
+
+  const cat = getCat(exp.categoryId);
+  const subOpts = (cat ? cat.subcategories : []).map(s =>
+    `<option value="${s}" ${s===exp.subcategory?'selected':''}>${s}</option>`).join('');
+  const catOpts = state.categories.map(c =>
+    `<option value="${c.id}" ${c.id===exp.categoryId?'selected':''}>${c.icon} ${c.name}</option>`).join('');
+  const travOpts = state.travelers.map(t =>
+    `<option value="${t.id}" ${t.id===exp.payerId?'selected':''}>${t.name}</option>`).join('');
+  const partRows = state.travelers.map(t => {
+    const isChecked = (exp.participants||[]).includes(t.id);
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;cursor:pointer">
+      <input type="checkbox" class="edit-part" value="${t.id}" ${isChecked?'checked':''}>
+      <span class="trav-avatar" style="background:${t.color||'var(--gold)'};width:24px;height:24px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;color:#fff">${t.name[0].toUpperCase()}</span>
+      ${t.name}
+    </label>`;
+  }).join('');
+
+  document.getElementById('edit-form-content').innerHTML = `
+    <div class="fgrp"><label>Data</label>
+      <input type="date" id="ed-date" class="fctl" value="${exp.date||''}"></div>
+    <div class="fgrp" style="grid-column:span 2"><label>Descrição</label>
+      <input type="text" id="ed-desc" class="fctl" value="${(exp.description||'').replace(/"/g,'&quot;')}"></div>
+    <div class="fgrp"><label>Categoria Macro</label>
+      <select id="ed-cat" class="fctl" onchange="repopulateEditSubcats()">${catOpts}</select></div>
+    <div class="fgrp"><label>Subcategoria</label>
+      <select id="ed-subcat" class="fctl">${subOpts}</select></div>
+    <div class="fgrp"><label>Valor</label>
+      <input type="number" id="ed-amount" class="fctl" step="0.01" min="0" value="${exp.amount||0}"></div>
+    <div class="fgrp"><label>Moeda</label>
+      <select id="ed-currency" class="fctl">
+        <option value="BRL" ${exp.currency==='BRL'?'selected':''}>🇧🇷 Real (R$)</option>
+        <option value="EUR" ${exp.currency==='EUR'?'selected':''}>🇪🇺 Euro (€)</option>
+      </select></div>
+    <div class="fgrp"><label>Pago por</label>
+      <select id="ed-payer" class="fctl">${travOpts}</select></div>
+    <div class="fgrp" style="grid-column:1/-1"><label>Participantes da divisão</label>
+      <div id="ed-participants" style="background:var(--surf2);border:1px solid var(--bord);border-radius:8px;padding:10px 12px">${partRows||'<div style="color:var(--txt2);font-size:12px">Nenhum viajante cadastrado.</div>'}</div></div>
+  `;
+  document.getElementById('edit-modal').classList.add('open');
+};
+
+window.repopulateEditSubcats = function() {
+  const catId = document.getElementById('ed-cat').value;
+  const cat = getCat(catId);
+  const sel = document.getElementById('ed-subcat');
+  sel.innerHTML = (cat ? cat.subcategories : []).map(s => `<option value="${s}">${s}</option>`).join('');
+};
+
+window.saveEditExpense = function() {
+  if (!editingExpenseId) return;
+  const exp = state.expenses.find(e => e.id === editingExpenseId);
+  if (!exp) { notify('Despesa não encontrada.','error'); closeModal(); return; }
+
+  const date    = document.getElementById('ed-date').value;
+  const desc    = document.getElementById('ed-desc').value.trim();
+  const catId   = document.getElementById('ed-cat').value;
+  const subcat  = document.getElementById('ed-subcat').value;
+  const amount  = parseFloat(document.getElementById('ed-amount').value);
+  const curr    = document.getElementById('ed-currency').value;
+  const payerId = document.getElementById('ed-payer').value;
+  const participants = Array.from(document.querySelectorAll('.edit-part:checked')).map(cb => cb.value);
+
+  if (!date || !desc || !catId || !amount || amount <= 0) {
+    notify('Preencha todos os campos obrigatórios.','error'); return;
+  }
+  if (!participants.length) {
+    notify('Selecione pelo menos um participante.','error'); return;
+  }
+
+  // Se mudou o conjunto de participantes e a despesa era "custom", reseta para divisão igual
+  // (o modal de edição não suporta valores customizados)
+  const wasCustom = exp.split === 'custom';
+  const sameParticipants = wasCustom
+    && (exp.participants||[]).length === participants.length
+    && participants.every(id => exp.participants.includes(id));
+
+  Object.assign(exp, {
+    date, description: desc, categoryId: catId, subcategory: subcat,
+    amount, currency: curr, payerId, participants
+  });
+  if (wasCustom && !sameParticipants) {
+    exp.split = 'equal';
+    exp.customAmounts = {};
+  }
+
+  editingExpenseId = null;
+  closeModal();
+  scheduleSave();
+  renderExpensesTable();
+  notify('Despesa atualizada!');
 };
 
 window.clearFilters = function() {
