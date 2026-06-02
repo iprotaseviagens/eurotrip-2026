@@ -75,6 +75,13 @@ body{background:var(--bg);color:var(--txt);font-family:'Plus Jakarta Sans',sans-
 .curr-mode-btn{background:transparent;color:var(--txt2);border:none;padding:5px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
 .curr-mode-btn:hover{color:var(--txt)}
 .curr-mode-btn.active{background:var(--gold);color:#0B1929}
+.per-trav-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+@media(min-width:1100px){.per-trav-grid{grid-template-columns:repeat(3,1fr)}}
+.per-trav-card{background:var(--surf2);border:1px solid var(--bord);border-radius:10px;padding:14px}
+.per-trav-hdr{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.per-trav-name{font-family:'Playfair Display',serif;font-size:14px;font-weight:600;flex:1}
+.per-trav-total{font-size:11px;color:var(--txt2);font-weight:600}
+.per-trav-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--txt2);font-size:12px;font-style:italic}
 
 /* ── CARDS / SURFACES ── */
 .card{background:var(--surf);border:1px solid var(--bord);border-radius:var(--r)}
@@ -297,6 +304,13 @@ input.toggle:checked::after{left:18px;background:#fff}
     <div class="card" style="margin-bottom:14px">
       <div class="card-hdr"><div class="card-hdr-ttl">👤 Resumo por Viajante</div></div>
       <div class="card-body" id="trav-breakdown"></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-hdr">
+        <div class="card-hdr-ttl">📊 Detalhamento por Viajante — Valor × Categoria</div>
+        <div style="font-size:11px;color:var(--txt2)">Usa o mesmo modo de moeda do gráfico acima</div>
+      </div>
+      <div class="card-body" id="per-trav-charts"></div>
     </div>
     <div class="card">
       <div class="card-hdr"><div class="card-hdr-ttl">📋 Últimas 5 Despesas</div></div>
@@ -776,6 +790,88 @@ function renderRecentExpenses() {
 // ══════════════════════════════════════════
 function drawCharts() {
   drawCategoryChart(); drawTravelerChart(); drawDailyChart(); drawSubcategoryChart();
+  drawPerTravelerCharts();
+}
+
+function drawPerTravelerCharts() {
+  // Destrói charts anteriores (IDs com prefixo 'ptc-')
+  Object.keys(charts).filter(k => k.startsWith('ptc-')).forEach(destroyChart);
+
+  const container = document.getElementById('per-trav-charts');
+  if (!container) return;
+
+  if (!state.travelers.length) {
+    container.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-ico">👥</div><div class="empty-sub">Cadastre viajantes para ver o detalhamento por categoria.</div></div>';
+    return;
+  }
+
+  const fmtCurr = travCurrencyMode === 'eur' ? 'EUR' : 'BRL';
+  const refSuffix = travCurrencyMode === 'ref' ? ' (ref.)' : '';
+
+  // Pré-calcula categorias com gasto e total por viajante
+  const perTrav = state.travelers.map(t => {
+    const cats = state.categories
+      .map(c => ({ cat: c, value: travCatTotal(t.id, c.id, travCurrencyMode) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+    const total = cats.reduce((s, x) => s + x.value, 0);
+    return { trav: t, cats, total };
+  });
+
+  container.innerHTML = '<div class="per-trav-grid">' + perTrav.map(({ trav, total }) => `
+    <div class="per-trav-card">
+      <div class="per-trav-hdr">
+        <div class="trav-avatar" style="background:${trav.color||'var(--gold)'};width:30px;height:30px;font-size:13px;margin-bottom:0">${trav.name[0].toUpperCase()}</div>
+        <div class="per-trav-name">${trav.name}</div>
+        <div class="per-trav-total">${total > 0 ? fmt(total, fmtCurr) + refSuffix : ''}</div>
+      </div>
+      <div class="chart-wrap" style="height:200px"><canvas id="ptc-${trav.id}"></canvas></div>
+    </div>
+  `).join('') + '</div>';
+
+  perTrav.forEach(({ trav, cats }) => {
+    const canvas = document.getElementById('ptc-' + trav.id);
+    if (!canvas) return;
+
+    if (!cats.length) {
+      canvas.parentElement.innerHTML = '<div class="per-trav-empty">Sem gastos nesta moeda</div>';
+      return;
+    }
+
+    charts['ptc-' + trav.id] = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: cats.map(x => x.cat.icon),
+        datasets: [{
+          data: cats.map(x => x.value),
+          backgroundColor: cats.map(x => x.cat.color + 'CC'),
+          borderColor: cats.map(x => x.cat.color),
+          borderWidth: 1.5,
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => {
+                const idx = items[0].dataIndex;
+                return cats[idx].cat.icon + ' ' + cats[idx].cat.name;
+              },
+              label: c => ' ' + fmt(c.raw, fmtCurr) + refSuffix
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#8FA3BF', font: { size: 16 } }, grid: { display: false } },
+          y: { ticks: { color: '#8FA3BF', font: { size: 10 } }, grid: { color: 'rgba(34,51,85,.5)' }, beginAtZero: true }
+        }
+      }
+    });
+  });
 }
 
 function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
@@ -801,6 +897,7 @@ window.setTravCurrencyMode = function(mode) {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
   drawTravelerChart();
+  drawPerTravelerCharts();
 };
 
 // Soma do que travId gastou na categoria catId, no modo de moeda escolhido
