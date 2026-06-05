@@ -100,6 +100,17 @@ body{background:var(--bg);color:var(--txt);font-family:'Plus Jakarta Sans',sans-
 .bal-row-val{display:flex;flex-direction:column;text-align:right;min-width:70px}
 .bal-row-val-lbl{font-size:9px;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
 .bal-row-val-num{font-size:13px;font-weight:600}
+/* ── HISTÓRICO ── */
+.archive-list{display:flex;flex-direction:column;gap:10px;max-height:55vh;overflow-y:auto;padding-right:4px}
+.archive-item{background:var(--surf2);border:1px solid var(--bord);border-radius:8px;padding:12px 14px;transition:border-color .15s}
+.archive-item:hover{border-color:var(--gold)}
+.archive-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.archive-name{font-family:'Playfair Display',serif;font-weight:600;font-size:15px;flex:1;min-width:140px}
+.archive-date{font-size:11px;color:var(--txt2);white-space:nowrap}
+.archive-stats{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--txt2);margin-bottom:10px}
+.archive-stats b{color:var(--txt);font-weight:600}
+.archive-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.archive-auto-tag{display:inline-block;background:rgba(139,108,247,.18);color:var(--purple);font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.5px;text-transform:uppercase;margin-left:6px}
 
 /* ── CARDS / SURFACES ── */
 .card{background:var(--surf);border:1px solid var(--bord);border-radius:var(--r)}
@@ -266,6 +277,8 @@ input.toggle:checked::after{left:18px;background:#fff}
       <div class="save-dot connecting" id="save-dot"></div>
       <span id="save-label">Conectando...</span>
     </div>
+    <button class="btn-backup" onclick="openNewTripModal()" title="Iniciar nova viagem (arquiva a atual)">🆕 Nova Viagem</button>
+    <button class="btn-backup" onclick="openHistoryModal()" title="Ver viagens arquivadas">📚 Histórico</button>
     <button class="btn-backup" onclick="backupToFile()" title="Baixar cópia local do HTML">💾 Backup</button>
   </div>
 </nav>
@@ -493,6 +506,48 @@ input.toggle:checked::after{left:18px;background:#fff}
   </div>
 </div>
 
+<!-- MODAL: Nova Viagem -->
+<div id="new-trip-modal" class="modal-ov">
+  <div class="modal">
+    <div class="modal-ttl">🆕 Iniciar Nova Viagem</div>
+    <div style="background:rgba(244,162,64,.1);border:1px solid rgba(244,162,64,.3);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--orange);margin-bottom:14px">
+      ⚠️ A viagem atual será <b>arquivada automaticamente</b> antes de ser substituída. Você poderá restaurá-la em 📚 Histórico.
+    </div>
+    <div class="fgrp" style="margin-bottom:14px">
+      <label>Nome da nova viagem</label>
+      <input type="text" id="nt-name" class="fctl" placeholder="Ex: Viagem ao Japão 2027">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:6px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="nt-copy-trav"> Copiar viajantes da viagem atual (zera investimentos)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="nt-copy-cats" checked> Copiar categorias da viagem atual
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeNewTripModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="startNewTrip()">🚀 Iniciar Nova Viagem</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Histórico -->
+<div id="history-modal" class="modal-ov">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-ttl">📚 Histórico de Viagens</div>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:14px">
+      Viagens anteriores arquivadas. Você pode restaurá-las (substitui a viagem ativa) ou excluí-las permanentemente.
+    </div>
+    <div id="history-list">
+      <div class="empty" style="padding:20px"><div class="empty-sub">Carregando...</div></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeHistoryModal()">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- NOTIFICATION -->
 <div id="notif" class="notif"><span id="notif-txt"></span></div>
 
@@ -501,7 +556,7 @@ input.toggle:checked::after{left:18px;background:#fff}
 // FIREBASE SETUP
 // ══════════════════════════════════════════
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, getDocs, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAkeipkPTLnFGR61B9QHoyrJA46NdrjOic",
@@ -701,6 +756,199 @@ window.onTripNameChange = function(val) {
   state.tripName = val;
   scheduleSave();
 };
+
+// ══════════════════════════════════════════
+// TRIP HISTORY (arquivo + restaurar + nova viagem)
+// ══════════════════════════════════════════
+const ARCHIVES_COL = collection(db, 'eurotrip2026', 'dados', 'archives');
+
+// Arquiva snapshot do state atual. reason = 'manual' | 'auto-before-new' | 'auto-before-restore'
+async function archiveCurrentTrip(reason = 'manual') {
+  const archiveId = `arch_${Date.now()}_${uid().slice(0,6)}`;
+  const payload = {
+    archivedAt: new Date().toISOString(),
+    name: state.tripName || 'Viagem sem nome',
+    reason,
+    data: {
+      tripName: state.tripName || '',
+      travelers: state.travelers || [],
+      categories: state.categories || [],
+      expenses: state.expenses || []
+    }
+  };
+  await setDoc(doc(ARCHIVES_COL, archiveId), payload);
+  return archiveId;
+}
+
+window.openNewTripModal = function() {
+  document.getElementById('nt-name').value = '';
+  document.getElementById('nt-copy-trav').checked = false;
+  document.getElementById('nt-copy-cats').checked = true;
+  document.getElementById('new-trip-modal').classList.add('open');
+};
+window.closeNewTripModal = function() {
+  document.getElementById('new-trip-modal').classList.remove('open');
+};
+
+window.startNewTrip = async function() {
+  const name = document.getElementById('nt-name').value.trim();
+  if (!name) { notify('Digite o nome da nova viagem.','error'); return; }
+  const copyTrav = document.getElementById('nt-copy-trav').checked;
+  const copyCats = document.getElementById('nt-copy-cats').checked;
+
+  // Confirma se a viagem atual tem dados — pra evitar "arquivar vazia" sem intenção
+  const hasData = (state.travelers?.length || 0) + (state.expenses?.length || 0) > 0;
+  if (hasData && !confirm(`Iniciar nova viagem "${name}"?\n\nA viagem atual (${state.tripName || 'sem nome'}) será arquivada automaticamente.`)) return;
+
+  closeNewTripModal();
+  setStatus('saving', 'Arquivando...');
+  try {
+    if (hasData) {
+      await archiveCurrentTrip('auto-before-new');
+    }
+    // Snapshot dos viajantes/categorias a copiar ANTES de zerar
+    const keepTrav = copyTrav
+      ? state.travelers.map(t => ({ ...t, investedBRL: 0, investedEUR: 0 }))
+      : [];
+    const keepCats = copyCats
+      ? JSON.parse(JSON.stringify(state.categories))
+      : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+
+    // Reset state
+    state = {
+      tripName: name,
+      travelers: keepTrav,
+      categories: keepCats,
+      expenses: []
+    };
+    // Limpa estado de UI volátil
+    editingTravelers.clear();
+    editingExpenseId = null;
+    expenseSort = { col: 'date', dir: 'desc' };
+
+    document.getElementById('trip-input').value = name;
+    scheduleSave();
+    refreshAllUI();
+    notify(`Nova viagem "${name}" iniciada!`);
+  } catch(e) {
+    console.error('Erro ao iniciar nova viagem:', e);
+    notify('Erro ao iniciar nova viagem. Veja o console.', 'error');
+    setStatus('error', 'Erro');
+  }
+};
+
+window.openHistoryModal = async function() {
+  document.getElementById('history-modal').classList.add('open');
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-sub">Carregando...</div></div>';
+  try {
+    const q = query(ARCHIVES_COL, orderBy('archivedAt', 'desc'));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      list.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-ico">📭</div><div class="empty-ttl">Nenhuma viagem arquivada</div><div class="empty-sub">Quando você iniciar uma nova viagem, a atual será arquivada aqui.</div></div>';
+      return;
+    }
+    const items = [];
+    snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+    renderHistoryList(items);
+  } catch(e) {
+    console.error('Erro ao carregar histórico:', e);
+    list.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-ttl">Erro ao carregar</div><div class="empty-sub">Veja o console (F12).</div></div>';
+  }
+};
+
+window.closeHistoryModal = function() {
+  document.getElementById('history-modal').classList.remove('open');
+};
+
+function renderHistoryList(items) {
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<div class="archive-list">' + items.map(it => {
+    const nExp = it.data?.expenses?.length || 0;
+    const nTrav = it.data?.travelers?.length || 0;
+    const totBRL = (it.data?.expenses || []).filter(e => e.currency==='BRL').reduce((s,e) => s + (e.amount||0), 0);
+    const totEUR = (it.data?.expenses || []).filter(e => e.currency==='EUR').reduce((s,e) => s + (e.amount||0), 0);
+    const autoTag = it.reason && it.reason.startsWith('auto-')
+      ? `<span class="archive-auto-tag" title="Arquivado automaticamente">auto</span>` : '';
+    return `<div class="archive-item">
+      <div class="archive-hdr">
+        <div class="archive-name">${escapeHtml(it.name)}${autoTag}</div>
+        <div class="archive-date">${fmtDateTime(it.archivedAt)}</div>
+      </div>
+      <div class="archive-stats">
+        <span>👥 <b>${nTrav}</b> viajante${nTrav!==1?'s':''}</span>
+        <span>💳 <b>${nExp}</b> despesa${nExp!==1?'s':''}</span>
+        ${totBRL>0?`<span>💰 <b>${fmt(totBRL,'BRL')}</b></span>`:''}
+        ${totEUR>0?`<span>💶 <b>${fmt(totEUR,'EUR')}</b></span>`:''}
+      </div>
+      <div class="archive-actions">
+        <button class="btn btn-primary btn-sm" onclick="restoreArchive('${it.id}')">♻️ Restaurar</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteArchive('${it.id}')">🗑️ Excluir</button>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+window.restoreArchive = async function(archiveId) {
+  if (!confirm('Restaurar esta viagem como ativa?\n\nA viagem atual será arquivada automaticamente antes da substituição.')) return;
+  setStatus('saving', 'Restaurando...');
+  try {
+    // Backup automático da viagem atual antes de restaurar
+    const hasData = (state.travelers?.length || 0) + (state.expenses?.length || 0) > 0;
+    if (hasData) {
+      await archiveCurrentTrip('auto-before-restore');
+    }
+    // Carrega o archive
+    const snap = await getDoc(doc(ARCHIVES_COL, archiveId));
+    if (!snap.exists()) { notify('Arquivo não encontrado.','error'); setStatus('error','Erro'); return; }
+    const archived = snap.data();
+    const d = archived.data || {};
+    state = {
+      tripName: d.tripName || archived.name || '',
+      travelers: d.travelers || [],
+      categories: d.categories && d.categories.length ? d.categories : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)),
+      expenses: d.expenses || []
+    };
+    editingTravelers.clear();
+    editingExpenseId = null;
+    expenseSort = { col: 'date', dir: 'desc' };
+
+    document.getElementById('trip-input').value = state.tripName || '';
+    closeHistoryModal();
+    scheduleSave();
+    refreshAllUI();
+    notify(`Viagem "${state.tripName || 'sem nome'}" restaurada!`);
+  } catch(e) {
+    console.error('Erro ao restaurar:', e);
+    notify('Erro ao restaurar viagem. Veja o console.', 'error');
+    setStatus('error', 'Erro');
+  }
+};
+
+window.deleteArchive = async function(archiveId) {
+  if (!confirm('Excluir esta viagem arquivada PERMANENTEMENTE?\n\nEsta ação não pode ser desfeita.')) return;
+  if (!confirm('Confirma a exclusão? Última chance.')) return;
+  try {
+    await deleteDoc(doc(ARCHIVES_COL, archiveId));
+    notify('Arquivo excluído.');
+    openHistoryModal();  // recarrega a lista
+  } catch(e) {
+    console.error('Erro ao excluir:', e);
+    notify('Erro ao excluir arquivo.','error');
+  }
+};
+
+function fmtDateTime(iso) {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  } catch { return iso; }
+}
+
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // ══════════════════════════════════════════
 // TAB SWITCHING
