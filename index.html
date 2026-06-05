@@ -82,6 +82,24 @@ body{background:var(--bg);color:var(--txt);font-family:'Plus Jakarta Sans',sans-
 .per-trav-name{font-family:'Playfair Display',serif;font-size:14px;font-weight:600;flex:1}
 .per-trav-total{font-size:11px;color:var(--txt2);font-weight:600}
 .per-trav-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--txt2);font-size:12px;font-style:italic}
+/* ── BALANCETE / SALDO ── */
+.balance-pos{color:var(--green);font-weight:700}
+.balance-neg{color:var(--red);font-weight:700}
+.balance-neutral{color:var(--txt2);font-weight:600}
+.trav-edit-btn{position:absolute;top:10px;right:38px;background:none;border:none;color:var(--txt2);cursor:pointer;font-size:14px;padding:4px;border-radius:6px;transition:color .2s;line-height:1}
+.trav-edit-btn:hover{color:var(--gold)}
+.trav-edit-form{display:flex;flex-direction:column;gap:10px}
+.trav-edit-form label{color:var(--txt2);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px;display:block}
+.color-palette{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.color-swatch{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .15s,border-color .15s}
+.color-swatch:hover{transform:scale(1.15)}
+.color-swatch.active{border-color:#fff;transform:scale(1.1)}
+.bal-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:var(--surf2);border:1px solid var(--bord);border-radius:8px;margin-bottom:6px}
+.bal-row-trav{display:flex;align-items:center;gap:9px;flex:1;min-width:120px}
+.bal-row-vals{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;align-items:center}
+.bal-row-val{display:flex;flex-direction:column;text-align:right;min-width:70px}
+.bal-row-val-lbl{font-size:9px;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.bal-row-val-num{font-size:13px;font-weight:600}
 
 /* ── CARDS / SURFACES ── */
 .card{background:var(--surf);border:1px solid var(--bord);border-radius:var(--r)}
@@ -311,6 +329,19 @@ input.toggle:checked::after{left:18px;background:#fff}
         <div style="font-size:11px;color:var(--txt2)">Usa o mesmo modo de moeda do gráfico acima</div>
       </div>
       <div class="card-body" id="per-trav-charts"></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-hdr">
+        <div>
+          <div class="card-hdr-ttl">💼 Balancete Coletivo</div>
+          <div style="font-size:11px;color:var(--txt2)">Investimento, consumo e saldo de cada viajante</div>
+        </div>
+        <div class="curr-mode-toggle" id="balance-mode-toggle">
+          <button class="curr-mode-btn active" data-mode="simple" onclick="setBalanceMode('simple')" title="Investiu − parte gastou (assume caixa coletivo)">Simples</button>
+          <button class="curr-mode-btn" data-mode="full" onclick="setBalanceMode('full')" title="Investiu + pagou do bolso − parte gastou (reconciliação completa)">Completo</button>
+        </div>
+      </div>
+      <div class="card-body" id="balance-body"></div>
     </div>
     <div class="card">
       <div class="card-hdr"><div class="card-hdr-ttl">📋 Últimas 5 Despesas</div></div>
@@ -701,6 +732,7 @@ let charts = {};
 function renderDashboard() {
   renderKPIs();
   renderTravelerBreakdown();
+  renderBalanceCard();
   renderRecentExpenses();
 }
 
@@ -725,9 +757,20 @@ function renderKPIs() {
     if (e.date) dayTot[e.date] = (dayTot[e.date]||0) + (e.currency==='EUR' ? e.amount*6 : e.amount);
   });
   const maxDay = Object.keys(dayTot).sort((a,b) => dayTot[b]-dayTot[a])[0];
+
+  // Investimento e caixa coletivo
+  const totInvBRL = state.travelers.reduce((s,t) => s + travInvested(t.id,'BRL'), 0);
+  const totInvEUR = state.travelers.reduce((s,t) => s + travInvested(t.id,'EUR'), 0);
+  const cashBRL = totInvBRL - brl;   // sobra (positivo) ou falta (negativo) no caixa coletivo
+  const cashEUR = totInvEUR - eur;
+  const cashClass = (cashBRL + cashEUR*6) >= 0 ? 'kpi-green' : 'kpi-red';
+  const cashIcon = (cashBRL + cashEUR*6) >= 0 ? '🏦' : '⚠️';
+
   document.getElementById('kpi-grid').innerHTML = `
     <div class="kpi-card kpi-gold"><div class="kpi-icon">💰</div><div class="kpi-lbl">Total Gasto (R$)</div><div class="kpi-val">${fmt(brl,'BRL')}</div><div class="kpi-sub">${state.expenses.filter(e=>e.currency==='BRL').length} despesas em reais</div></div>
     <div class="kpi-card kpi-teal"><div class="kpi-icon">💶</div><div class="kpi-lbl">Total Gasto (€)</div><div class="kpi-val">${fmt(eur,'EUR')}</div><div class="kpi-sub">${state.expenses.filter(e=>e.currency==='EUR').length} despesas em euros</div></div>
+    <div class="kpi-card kpi-purple"><div class="kpi-icon">💼</div><div class="kpi-lbl">Total Investido</div><div class="kpi-val" style="font-size:16px">${fmt(totInvBRL,'BRL')}${totInvEUR>0?'<br>'+fmt(totInvEUR,'EUR'):''}</div><div class="kpi-sub">contribuições dos viajantes</div></div>
+    <div class="kpi-card ${cashClass}"><div class="kpi-icon">${cashIcon}</div><div class="kpi-lbl">Saldo do Caixa</div><div class="kpi-val" style="font-size:16px">${fmt(cashBRL,'BRL')}${totInvEUR>0||eur>0?'<br>'+fmt(cashEUR,'EUR'):''}</div><div class="kpi-sub">investido − gasto total</div></div>
     <div class="kpi-card kpi-green"><div class="kpi-icon">📋</div><div class="kpi-lbl">Total de Registros</div><div class="kpi-val">${state.expenses.length}</div><div class="kpi-sub">${dates.length} dias com gastos</div></div>
     <div class="kpi-card kpi-orange"><div class="kpi-icon">📅</div><div class="kpi-lbl">Média Diária (R$)</div><div class="kpi-val">${fmt(brl/nDays,'BRL')}</div><div class="kpi-sub">${eur > 0 ? fmt(eur/nDays,'EUR') + ' por dia (€)' : 'apenas reais'}</div></div>
     <div class="kpi-card kpi-purple"><div class="kpi-icon">🏆</div><div class="kpi-lbl">Categoria Top</div><div class="kpi-val" style="font-size:17px">${topCat ? topCat.icon+' '+topCat.name : '-'}</div><div class="kpi-sub">maior volume de gastos</div></div>
@@ -735,6 +778,83 @@ function renderKPIs() {
     <div class="kpi-card kpi-teal"><div class="kpi-icon">👥</div><div class="kpi-lbl">Viajantes</div><div class="kpi-val">${state.travelers.length}</div><div class="kpi-sub">${topTrav ? 'Maior gasto: '+topTrav.name : 'cadastre viajantes'}</div></div>
     <div class="kpi-card kpi-gold"><div class="kpi-icon">🗂️</div><div class="kpi-lbl">Categorias</div><div class="kpi-val">${state.categories.length}</div><div class="kpi-sub">${state.categories.reduce((s,c)=>s+c.subcategories.length,0)} subcategorias</div></div>
   `;
+}
+
+// ── BALANCETE COLETIVO (Dashboard) ──
+let balanceMode = 'simple'; // 'simple' | 'full'
+
+window.setBalanceMode = function(mode) {
+  if (!['simple','full'].includes(mode)) return;
+  balanceMode = mode;
+  document.querySelectorAll('#balance-mode-toggle .curr-mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  renderBalanceCard();
+};
+
+function renderBalanceCard() {
+  const el = document.getElementById('balance-body');
+  if (!el) return;
+  if (!state.travelers.length) {
+    el.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-ico">👥</div><div class="empty-sub">Cadastre viajantes para ver o balancete</div></div>';
+    return;
+  }
+
+  const balFn = balanceMode === 'full' ? travBalanceFull : travBalanceSimple;
+  const modeNote = balanceMode === 'full'
+    ? 'Saldo = investiu + pagou do bolso − parte gastou'
+    : 'Saldo = investiu − parte gastou (assume caixa coletivo)';
+
+  let sumPosBRL = 0, sumNegBRL = 0, sumPosEUR = 0, sumNegEUR = 0;
+
+  const rows = state.travelers.map(t => {
+    const invBRL = travInvested(t.id,'BRL');
+    const invEUR = travInvested(t.id,'EUR');
+    const spentBRL = travTotalByCurr(t.id,'BRL');
+    const spentEUR = travTotalByCurr(t.id,'EUR');
+    const paidBRL = travPaidOutOfPocket(t.id,'BRL');
+    const paidEUR = travPaidOutOfPocket(t.id,'EUR');
+    const balBRL = balFn(t.id,'BRL');
+    const balEUR = balFn(t.id,'EUR');
+    if (balBRL > 0) sumPosBRL += balBRL; else sumNegBRL += balBRL;
+    if (balEUR > 0) sumPosEUR += balEUR; else sumNegEUR += balEUR;
+
+    const showPaid = balanceMode === 'full';
+
+    return `<div class="bal-row">
+      <div class="bal-row-trav">
+        <div class="trav-avatar" style="background:${t.color||'var(--gold)'};width:32px;height:32px;font-size:13px;margin-bottom:0">${t.name[0].toUpperCase()}</div>
+        <div style="font-weight:600;font-size:13px">${t.name}</div>
+      </div>
+      <div class="bal-row-vals">
+        <div class="bal-row-val"><span class="bal-row-val-lbl">Investiu</span>
+          <span class="bal-row-val-num">${fmt(invBRL,'BRL')}${invEUR>0?'<br>'+fmt(invEUR,'EUR'):''}</span></div>
+        ${showPaid?`<div class="bal-row-val"><span class="bal-row-val-lbl">Pagou</span>
+          <span class="bal-row-val-num">${fmt(paidBRL,'BRL')}${paidEUR>0?'<br>'+fmt(paidEUR,'EUR'):''}</span></div>`:''}
+        <div class="bal-row-val"><span class="bal-row-val-lbl">Parte gastou</span>
+          <span class="bal-row-val-num">${fmt(spentBRL,'BRL')}${spentEUR>0?'<br>'+fmt(spentEUR,'EUR'):''}</span></div>
+        <div class="bal-row-val"><span class="bal-row-val-lbl">Saldo</span>
+          <span class="bal-row-val-num ${balanceClass(balBRL)}">${fmt(balBRL,'BRL')}</span>
+          ${(invEUR>0||spentEUR>0||paidEUR>0)?`<span class="bal-row-val-num ${balanceClass(balEUR)}">${fmt(balEUR,'EUR')}</span>`:''}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--txt2);margin-bottom:10px;font-style:italic">ℹ️ ${modeNote}</div>
+    ${rows}
+    <div style="display:flex;justify-content:space-between;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid var(--bord);flex-wrap:wrap">
+      <div style="font-size:12px">
+        <span style="color:var(--txt2)">A receber: </span>
+        <span class="balance-pos">${fmt(sumPosBRL,'BRL')}</span>
+        ${sumPosEUR>0?` <span class="balance-pos">${fmt(sumPosEUR,'EUR')}</span>`:''}
+      </div>
+      <div style="font-size:12px">
+        <span style="color:var(--txt2)">A pagar: </span>
+        <span class="balance-neg">${fmt(Math.abs(sumNegBRL),'BRL')}</span>
+        ${sumNegEUR<0?` <span class="balance-neg">${fmt(Math.abs(sumNegEUR),'EUR')}</span>`:''}
+      </div>
+    </div>`;
 }
 
 function renderTravelerBreakdown() {
@@ -1371,7 +1491,7 @@ window.addTraveler = function() {
   if (!name) { notify('Digite o nome do viajante.','error'); return; }
   if (state.travelers.find(t => t.name.toLowerCase() === name.toLowerCase())) { notify('Viajante já cadastrado.','error'); return; }
   const color = AVATAR_COLORS[state.travelers.length % AVATAR_COLORS.length];
-  state.travelers.push({ id:uid(), name, color });
+  state.travelers.push({ id:uid(), name, color, investedBRL: 0, investedEUR: 0 });
   document.getElementById('new-trav-name').value = '';
   scheduleSave();
   renderTravelersTab();
@@ -1387,6 +1507,42 @@ window.removeTraveler = function(id) {
   notify('Viajante removido.');
 };
 
+// ── Auxiliares de investimento e saldo ──
+function travInvested(travId, curr) {
+  const t = getTrav(travId);
+  if (!t) return 0;
+  return (curr === 'EUR' ? t.investedEUR : t.investedBRL) || 0;
+}
+
+function travPaidOutOfPocket(travId, curr) {
+  return state.expenses
+    .filter(e => e.currency === curr && e.payerId === travId)
+    .reduce((s, e) => s + e.amount, 0);
+}
+
+// Saldo simples: investido - parte consumida
+function travBalanceSimple(travId, curr) {
+  return travInvested(travId, curr) - travTotalByCurr(travId, curr);
+}
+
+// Saldo completo (Splitwise-style): investido + pago_do_bolso - parte consumida
+function travBalanceFull(travId, curr) {
+  return travInvested(travId, curr) + travPaidOutOfPocket(travId, curr) - travTotalByCurr(travId, curr);
+}
+
+function balanceClass(v) {
+  if (Math.abs(v) < 0.005) return 'balance-neutral';
+  return v > 0 ? 'balance-pos' : 'balance-neg';
+}
+
+function balanceSign(v) {
+  if (Math.abs(v) < 0.005) return '';
+  return v > 0 ? '+' : '−';  // o fmt já cuida de números negativos, mas queremos sinal explícito
+}
+
+// Estado de quais viajantes estão em modo edição (runtime, não persiste)
+const editingTravelers = new Set();
+
 function renderTravelersTab() {
   const el = document.getElementById('trav-cards');
   if (!state.travelers.length) {
@@ -1394,26 +1550,107 @@ function renderTravelersTab() {
     return;
   }
   el.innerHTML = state.travelers.map(t => {
-    const brl = travTotalByCurr(t.id,'BRL');
-    const eur = travTotalByCurr(t.id,'EUR');
-    const nExp = state.expenses.filter(e => e.participants && e.participants.includes(t.id)).length;
-    const paidBRL = state.expenses.filter(e=>e.payerId===t.id&&e.currency==='BRL').reduce((s,e)=>s+e.amount,0);
-    const paidEUR = state.expenses.filter(e=>e.payerId===t.id&&e.currency==='EUR').reduce((s,e)=>s+e.amount,0);
-    return `<div class="trav-card">
-      <button class="btn-del" onclick="removeTraveler('${t.id}')" title="Remover">✕</button>
-      <div class="trav-avatar" style="background:${t.color}">${t.name[0].toUpperCase()}</div>
-      <div class="trav-name">${t.name}</div>
-      <div class="trav-stats">
-        <div class="trav-stat"><span class="trav-stat-lbl">Despesas participou</span><span class="trav-stat-val">${nExp}</span></div>
-        <div class="trav-stat"><span class="trav-stat-lbl">Pagou por (R$)</span><span class="trav-stat-val">${fmt(paidBRL,'BRL')}</span></div>
-        <div class="trav-stat"><span class="trav-stat-lbl">Pagou por (€)</span><span class="trav-stat-val">${fmt(paidEUR,'EUR')}</span></div>
-        <hr class="divider" style="margin:8px 0">
-        <div class="trav-stat"><span class="trav-stat-lbl">Parte pessoal (R$)</span><span class="trav-stat-val">${fmt(brl,'BRL')}</span></div>
-        <div class="trav-stat"><span class="trav-stat-lbl">Parte pessoal (€)</span><span class="trav-stat-val">${fmt(eur,'EUR')}</span></div>
-      </div>
-    </div>`;
+    if (editingTravelers.has(t.id)) return renderTravelerCardEdit(t);
+    return renderTravelerCardView(t);
   }).join('');
 }
+
+function renderTravelerCardView(t) {
+  const brl = travTotalByCurr(t.id, 'BRL');
+  const eur = travTotalByCurr(t.id, 'EUR');
+  const invBRL = travInvested(t.id, 'BRL');
+  const invEUR = travInvested(t.id, 'EUR');
+  const balBRL = travBalanceSimple(t.id, 'BRL');
+  const balEUR = travBalanceSimple(t.id, 'EUR');
+  const nExp = state.expenses.filter(e => e.participants && e.participants.includes(t.id)).length;
+  const paidBRL = state.expenses.filter(e=>e.payerId===t.id&&e.currency==='BRL').reduce((s,e)=>s+e.amount,0);
+  const paidEUR = state.expenses.filter(e=>e.payerId===t.id&&e.currency==='EUR').reduce((s,e)=>s+e.amount,0);
+  return `<div class="trav-card">
+    <button class="btn-del" onclick="removeTraveler('${t.id}')" title="Remover">✕</button>
+    <button class="trav-edit-btn" onclick="editTraveler('${t.id}')" title="Editar">✏️</button>
+    <div class="trav-avatar" style="background:${t.color}">${t.name[0].toUpperCase()}</div>
+    <div class="trav-name">${t.name}</div>
+    <div class="trav-stats">
+      <div class="trav-stat"><span class="trav-stat-lbl">Despesas participou</span><span class="trav-stat-val">${nExp}</span></div>
+      <hr class="divider" style="margin:8px 0">
+      <div class="trav-stat"><span class="trav-stat-lbl">💰 Investiu (R$)</span><span class="trav-stat-val">${fmt(invBRL,'BRL')}</span></div>
+      <div class="trav-stat"><span class="trav-stat-lbl">💶 Investiu (€)</span><span class="trav-stat-val">${fmt(invEUR,'EUR')}</span></div>
+      <div class="trav-stat"><span class="trav-stat-lbl">Parte gastou (R$)</span><span class="trav-stat-val">${fmt(brl,'BRL')}</span></div>
+      <div class="trav-stat"><span class="trav-stat-lbl">Parte gastou (€)</span><span class="trav-stat-val">${fmt(eur,'EUR')}</span></div>
+      <hr class="divider" style="margin:8px 0">
+      <div class="trav-stat"><span class="trav-stat-lbl">Saldo simples (R$)</span><span class="${balanceClass(balBRL)}">${fmt(balBRL,'BRL')}</span></div>
+      <div class="trav-stat"><span class="trav-stat-lbl">Saldo simples (€)</span><span class="${balanceClass(balEUR)}">${fmt(balEUR,'EUR')}</span></div>
+      <hr class="divider" style="margin:8px 0">
+      <div class="trav-stat"><span class="trav-stat-lbl">Pagou do bolso (R$)</span><span class="trav-stat-val">${fmt(paidBRL,'BRL')}</span></div>
+      <div class="trav-stat"><span class="trav-stat-lbl">Pagou do bolso (€)</span><span class="trav-stat-val">${fmt(paidEUR,'EUR')}</span></div>
+    </div>
+  </div>`;
+}
+
+function renderTravelerCardEdit(t) {
+  const swatches = AVATAR_COLORS.map(c =>
+    `<span class="color-swatch ${c===t.color?'active':''}" data-color="${c}" style="background:${c}" onclick="pickTravColor('${t.id}','${c}')"></span>`
+  ).join('');
+  return `<div class="trav-card" data-trav-id="${t.id}">
+    <div class="trav-avatar" id="te-avatar-${t.id}" style="background:${t.color}">${(t.name[0]||'?').toUpperCase()}</div>
+    <div class="trav-edit-form">
+      <div><label>Nome</label>
+        <input type="text" id="te-name-${t.id}" class="fctl" value="${(t.name||'').replace(/"/g,'&quot;')}"></div>
+      <div><label>Cor do avatar</label>
+        <div class="color-palette" id="te-colors-${t.id}">${swatches}</div>
+        <input type="hidden" id="te-color-${t.id}" value="${t.color}">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><label>💰 Investiu (R$)</label>
+          <input type="number" id="te-inv-brl-${t.id}" class="fctl" step="0.01" min="0" value="${t.investedBRL||0}"></div>
+        <div><label>💶 Investiu (€)</label>
+          <input type="number" id="te-inv-eur-${t.id}" class="fctl" step="0.01" min="0" value="${t.investedEUR||0}"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-outline btn-sm" style="flex:1" onclick="cancelTravelerEdit('${t.id}')">✕ Cancelar</button>
+        <button class="btn btn-primary btn-sm" style="flex:1" onclick="saveTravelerEdit('${t.id}')">💾 Salvar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+window.editTraveler = function(id) {
+  editingTravelers.add(id);
+  renderTravelersTab();
+};
+
+window.cancelTravelerEdit = function(id) {
+  editingTravelers.delete(id);
+  renderTravelersTab();
+};
+
+window.pickTravColor = function(id, color) {
+  document.getElementById('te-color-' + id).value = color;
+  document.getElementById('te-avatar-' + id).style.background = color;
+  document.querySelectorAll('#te-colors-' + id + ' .color-swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.color === color);
+  });
+};
+
+window.saveTravelerEdit = function(id) {
+  const t = getTrav(id);
+  if (!t) { editingTravelers.delete(id); renderTravelersTab(); return; }
+  const name  = document.getElementById('te-name-' + id).value.trim();
+  const color = document.getElementById('te-color-' + id).value;
+  const ibrl  = parseFloat(document.getElementById('te-inv-brl-' + id).value) || 0;
+  const ieur  = parseFloat(document.getElementById('te-inv-eur-' + id).value) || 0;
+  if (!name) { notify('Nome não pode ficar vazio.','error'); return; }
+  const dup = state.travelers.find(other => other.id !== id && other.name.toLowerCase() === name.toLowerCase());
+  if (dup) { notify('Já existe outro viajante com esse nome.','error'); return; }
+  t.name = name;
+  t.color = color;
+  t.investedBRL = ibrl;
+  t.investedEUR = ieur;
+  editingTravelers.delete(id);
+  scheduleSave();
+  refreshAllUI();
+  notify('Viajante atualizado!');
+};
 
 // ══════════════════════════════════════════
 // CATEGORIES
