@@ -670,10 +670,18 @@ async function initFirebase() {
     setStatus('saved', 'Conectado ✓');
   } catch(e) {
     console.error('Erro Firebase:', e);
-    setLoadingText('Erro ao conectar. Verifique as regras do Firestore.');
+    const code = e?.code || e?.name || 'unknown';
+    const msg = e?.message ? String(e.message).slice(0, 180) : '';
+    let hint = '';
+    if (code === 'permission-denied' || /permission/i.test(msg)) {
+      hint = ' Verifique as regras do Firestore (subcoleção \"archives\" pode estar bloqueada — use match /eurotrip2026/{document=**}).';
+    } else if (code === 'unavailable' || /offline|network/i.test(msg)) {
+      hint = ' Sem internet ou Firestore indisponível.';
+    }
+    setLoadingText(`Erro ao conectar (${code}).${hint}`);
     setStatus('error', 'Sem conexão');
     // Tenta iniciar offline
-    setTimeout(() => { hideLoading(); initUI(); }, 2000);
+    setTimeout(() => { hideLoading(); initUI(); }, 2500);
   }
 }
 
